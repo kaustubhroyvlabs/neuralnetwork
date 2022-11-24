@@ -1,40 +1,31 @@
-#%%
 import pandas as pd
 import numpy as np
+import torch
+import torch.nn as nn
 
-# %%
 flow_type = np.genfromtxt('FlowStructure_2022_03_24_total.dat', dtype=str)
 vol_data = np.genfromtxt('points_vol.dat', skip_header=1)
 velocity_data = np.load('data.npy')
-# %%
-# z_resolution = vol_data[0][2]-vol_data[1][2]
-# vol_data[:,2] = vol_data[:,2]/z_resolution
-
-# %%
-import torch
-import torch.nn as nn
 
 labels = np.unique(flow_type[:,1])
 label2id = {k:v for k,v in enumerate(labels)}
 id2label = {v:k for k,v in label2id.items()}
-# %%
+
 x_bins = np.linspace(start = vol_data[:,0].min(), stop=vol_data[:,0].max(), num=15)
 y_bins = np.linspace(start = vol_data[:,1].min(), stop=vol_data[:,1].max(), num=15)
 z_bins = np.linspace(start = vol_data[:,2].min(), stop=vol_data[:,2].max(), num=30)
-# %%
+
 vol_map_x = np.digitize(vol_data[:,0], x_bins)
 vol_map_y = np.digitize(vol_data[:,1], y_bins)
 vol_map_z = np.digitize(vol_data[:,2], z_bins)
-# %%
+
 new_vol_map = np.concatenate((np.expand_dims(vol_map_x, 0), np.expand_dims(vol_map_y, 0), np.expand_dims(vol_map_z, 0)), axis=0).transpose()
 velocity_data_sliced = velocity_data[int(flow_type[0][0]):int(flow_type[-1][0])+1, :, :]
-# %%
 new_velocity_data = np.random.rand(10800, 15, 15, 30, 3)
 for i in range(len(new_vol_map)):
     pos = new_vol_map[i]
     new_velocity_data[:, pos[0]-1, pos[1]-1, pos[2]-1, :] = velocity_data_sliced[:, i, :]
 
-# %%
 class ClassifierModel(nn.Module):
     def __init__(self, num_classes, id2label, label2id) -> None:
         super().__init__()
@@ -78,5 +69,6 @@ class ClassifierModel(nn.Module):
             self.train_one_epoch(data, targets)
 
 model = ClassifierModel(5, id2label, label2id)
-            
-
+data = torch.tensor(new_velocity_data[0:6000])
+targets = torch.tensor([id2label[i] for i in flow_type[0:6000, 1]])
+model.fit(data, targets, epochs=5)
