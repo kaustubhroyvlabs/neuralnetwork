@@ -37,7 +37,16 @@ velocity_data_sliced = velocity_data[int(flow_type[0,0]):int(flow_type[-1,0])+1,
 #print(targets.shape)
 
 #%%
+
+"""
+Three Golden Properties of Object Oriented Programming:
+1. Inheritance  -> Subclassing
+2. Polymorphism -> Method Overriding
+3. Abstraction  -> Subclassing
+"""
 class ClassifierModel(nn.Module):
+
+    #   Constructor Function:
     def __init__(self, num_classes, id2label, label2id) -> None:
         super().__init__()
         #self.conv_layer = nn.Conv3d(in_channels=3, out_channels=10, kernel_size=(5,5,5), stride=3, padding='none')
@@ -55,8 +64,10 @@ class ClassifierModel(nn.Module):
         #self.flatten = nn.Flatten(start_dim=1, end_dim=-1)
         #self.classifier = nn.Linear(in_features=3240, out_features=5)
         self.loss_fc = nn.CrossEntropyLoss(reduction='none')
-        self.optimizer = torch.optim.Adam()
+        # p = self.mlp2.parameters()
+        # self.optimizer = torch.optim.Adam(p)
 
+    #   Call Function/Default Function:
     def forward(self, input):
         #x = self.conv_layer(input)
         x = self.mlp1(input)
@@ -74,14 +85,45 @@ class ClassifierModel(nn.Module):
         #x = self.flatten(x)
         #x = self.classifier(x)
         return x
+    
+    def predict(self, input):
+        output = self(input)
+        #   If you want to pass one time step: i.e. input.shape = 19875
+        #   input = input.unsqueeze(0)
+        #   input shape has to be (n, 19875)
+        pred = output.argmax(dim=-1)
+        return pred
+    
+    def predict_classes(self, input):
+        pred = self.predict(input)
+        return [self.config['id2label'][str(i)] for i in pred]
 
     def create_optimizer(self):
         trainable_params = [p for p in self.parameters() if p.requires_grad==True]
         self.optimizer = torch.optim.Adam(params=trainable_params, lr = 5e-3)
 
-    def train_one_epoch(self, data, target):
+    def train_one_epoch(self, data, target, x_test, y_test):
         if self.optimizer is None:
             self.create_optimizer()
+        """
+        In general in batched training, train_one_epoch will call training_step function
+        which processes one batch of data at a time
+        data(Dataset/Dataloader) -> shape = (n_batches, batch_size, input_tensor.shape)
+        target(Dataset/Dataloader) -> shape = (n_batches, batch_size, label.shape)
+        for i in range(n_batches):
+            training_step(data[i], targets[i])
+
+        if metric is not None:
+            dict_metric = {
+                "accuracy": self.compute_accuracy,
+                "f1": self.prec_rec,
+                "confusion": self.confusion_matrix,
+            }
+            a = dict_metric[metric](x_test, y_test)
+            print(f"{metric}:"a)
+        
+
+        """
         for idx in range(len(data)):
             input = data[idx].unsqueeze(0)
             output = self(input)
@@ -90,6 +132,12 @@ class ClassifierModel(nn.Module):
             loss.backward()
             self.optimizer.step()
             self.optimizer.zero_grad()
+
+    def training_step(self, one_batch_of_data, one_batch_of_target):
+        output = self(one_batch_of_data)
+        label = one_batch_of_target
+        loss = self.loss_fc(output, label)
+        """...blah blah blah..."""
         
     def fit(self, data, targets, epochs):
         for epoch in range(epochs):
@@ -101,28 +149,63 @@ class ClassifierModel(nn.Module):
         for idx in range(len(data)):
             input = data[idx].unsqueeze(0)
             output = self(input).squeeze(0)
-            pred = output.argmax()
+            pred = output.argmax(dim=-1)
             label = target[idx]
             if pred==label:
                 acc+=1
         return float(acc/len(data))
 
     def confusion_matrix(self, data, target):
-        acc = torch.zeros(size=(target.max()+1, target.max()+1))
+        conf_mat = torch.zeros(size=(target.max()+1, target.max()+1))
         for idx in range(len(data)):
             input = data[idx].unsqueeze(0)
             output = self(input).squeeze(0)
-            pred = output.argmax()
+            pred = output.argmax(dim=-1)
             label = target[idx]
-            acc[label][pred]+=1
+            conf_mat[label][pred]+=1
+        return conf_mat
+    
+    def prec_rec(self, conf_mat):
+        p_matrix = torch.zeros(size=len(conf_mat))
+        r_matrix = torch.zeros(size=len(conf_mat))
+        for i in range(len(conf_mat)):
+            p_matrix[i] = conf_mat[i][i]/torch.sum(conf_mat[i])
+            r_matrix[i] = conf_mat[i][i]/torch.sum(conf_mat[:,i])
             
+        f1_matrix = (p_matrix*r_matrix)/(p_matrix+r_matrix)
+        return p_matrix, r_matrix, f1_matrix
 
+    def compile(self, optimizer, loss, metric):
+        """
+        Optimizer:  Accepts a object of the optimizer class or a string value that corresponds to a default optimizer object
+                        ex.: torch.optim.Adam, "adam", "adagrad" etc.
 
+        metric:     Accepts a string either "accuracy", "f1", "confusion"
+        """
+        trainable_params = [p for p in self.parameters() if p.requires_grad==True]
+        if type(optimizer)==str:
+            dict_optim = {
+                "adam": torch.optim.Adam,
+                "adagrad": torch.optim.Adagrad,
+                "sgd": torch.optim.SGD,
+            }
+            self.optimizer = dict_optim[optimizer](trainable_params)
+        else:
+            self.optimizer = optimizer(trainable_params)
+        
+        if type(loss)==str:
+            dict_loss = {
+                "crossentropy": torch.nn.CrossEntropyLoss(),
+                "mseloss": torch.nn.MSELoss(),
+            }
+            self.loss_fc=dict_loss[loss]
 
-            
+        self.metric = metric
+                
 #%%
-model = ClassifierModel(5, id2label, label2id)
-data = torch.tensor(velocity_data_sliced[0:6000], dtype = torch.float32).reshape(6000,19875)
+data = torch.tensor(velocity_data_sliced[0:6000], dtype = torch.float32).reshape(6000, 19875)
 targets = torch.tensor([id2label[i] for i in flow_type[0:6000, 1]])
+num_classes = targets.max()+1
+# model = ClassifierModel(num_classes, id2label, label2id)
 print(targets)
 # model.fit(data, targets, epochs=5)
