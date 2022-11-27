@@ -1,55 +1,29 @@
-#%%
+
 import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
-#%%
+import torchvision
+import torchvision.transforms as transforms
+from torch.utils.data import Dataset, TensorDataset
+
+from datetime import datetime as dt
+
 flow_type = np.genfromtxt('../dataset2/FlowStructure_2022_03_24_total.dat', dtype=str)
 vol_data = np.genfromtxt('../points_vol.dat', skip_header=1)
 velocity_data = np.load('../dataset2/data.npy')
+velocity_data_sliced = velocity_data[int(flow_type[0,0]):int(flow_type[-1,0])+1, :, :]
 
 labels = np.unique(flow_type[:,1])
 label2id = {k:v for k,v in enumerate(labels)}
 id2label = {v:k for k,v in label2id.items()}
 
-"""
-x_bins = np.linspace(start = vol_data[:,0].min(), stop=vol_data[:,0].max(), num=15)
-y_bins = np.linspace(start = vol_data[:,1].min(), stop=vol_data[:,1].max(), num=15)
-z_bins = np.linspace(start = vol_data[:,2].min(), stop=vol_data[:,2].max(), num=30)
-vol_map_x = np.digitize(vol_data[:,0], x_bins)
-vol_map_y = np.digitize(vol_data[:,1], y_bins)
-vol_map_z = np.digitize(vol_data[:,2], z_bins)
-new_vol_map = np.concatenate((np.expand_dims(vol_map_x, 0), np.expand_dims(vol_map_y, 0), np.expand_dims(vol_map_z, 0)), axis=0).transpose()
-velocity_data_sliced = velocity_data[int(flow_type[0][0]):int(flow_type[-1][0])+1, :, :]
-new_velocity_data = np.random.rand(10800, 15, 15, 30, 3)
-for i in range(len(new_vol_map)):
-    pos = new_vol_map[i]
-    new_velocity_data[:, pos[0]-1, pos[1]-1, pos[2]-1, :] = velocity_data_sliced[:, i, :]
-"""
-#%%
-velocity_data_sliced = velocity_data[int(flow_type[0,0]):int(flow_type[-1,0])+1, :, :]
-#velocity_data_sliced = velocity_data_sliced.astype(np.float32)
 
-#print(velocity_data_sliced.shape)
-#v = velocity_data_sliced[0:6000, :].reshape(6000,19875)
-#print(v.shape)
-#targets = np.array([id2label[i] for i in flow_type[0:6000, 1]])
-#print(targets.shape)
-
-#%%
-
-"""
-Three Golden Properties of Object Oriented Programming:
-1. Inheritance  -> Subclassing
-2. Polymorphism -> Method Overriding
-3. Abstraction  -> Subclassing
-"""
 class ClassifierModel(nn.Module):
 
     #   Constructor Function:
     def __init__(self, num_classes, id2label, label2id) -> None:
         super().__init__()
-        #self.conv_layer = nn.Conv3d(in_channels=3, out_channels=10, kernel_size=(5,5,5), stride=3, padding='none')
         self.act = nn.GELU()
         self.mlp1 = nn.Linear(in_features=19875, out_features=9936)
         self.mlp2 = nn.Linear(in_features=9936, out_features=4968)
@@ -57,19 +31,15 @@ class ClassifierModel(nn.Module):
         self.mlp4 = nn.Linear(in_features=1000, out_features=200)
         self.mlp5 = nn.Linear(in_features=200, out_features=50)
         self.mlp6 = nn.Linear(in_features=50, out_features=5)
-        #self.pool = nn.MaxPool3d(kernel_size=(3,3), stride=1, padding='same')
         self.config = {}
         self.config['id2label']=id2label
         self.config['label2id']=label2id
-        #self.flatten = nn.Flatten(start_dim=1, end_dim=-1)
-        #self.classifier = nn.Linear(in_features=3240, out_features=5)
         self.loss_fc = nn.CrossEntropyLoss(reduction='none')
         # p = self.mlp2.parameters()
-        # self.optimizer = torch.optim.Adam(p)
+        self.optimizer = None
 
     #   Call Function/Default Function:
     def forward(self, input):
-        #x = self.conv_layer(input)
         x = self.mlp1(input)
         x = self.act(x)
         x = self.mlp2(x)
@@ -81,16 +51,13 @@ class ClassifierModel(nn.Module):
         x = self.mlp5(x)
         x = self.act(x)
         x = self.mlp6(x)
-        #x = self.pool(x)
-        #x = self.flatten(x)
-        #x = self.classifier(x)
         return x
     
     def predict(self, input):
-        output = self(input)
         #   If you want to pass one time step: i.e. input.shape = 19875
         #   input = input.unsqueeze(0)
         #   input shape has to be (n, 19875)
+        output = self(input)
         pred = output.argmax(dim=-1)
         return pred
     
@@ -102,7 +69,7 @@ class ClassifierModel(nn.Module):
         trainable_params = [p for p in self.parameters() if p.requires_grad==True]
         self.optimizer = torch.optim.Adam(params=trainable_params, lr = 5e-3)
 
-    def train_one_epoch(self, data, target, x_test, y_test):
+    def train_one_epoch(self, data, target, test_data, test_targets):
         if self.optimizer is None:
             self.create_optimizer()
         """
@@ -125,6 +92,7 @@ class ClassifierModel(nn.Module):
 
         """
         for idx in range(len(data)):
+            #print(idx)
             input = data[idx].unsqueeze(0)
             output = self(input)
             label = target[idx].unsqueeze(0)
@@ -132,21 +100,40 @@ class ClassifierModel(nn.Module):
             loss.backward()
             self.optimizer.step()
             self.optimizer.zero_grad()
+        
+        accuracy = self.compute_accuracy(test_data, test_targets)
+        confusion_matrix = self.confusion_matrix(test_data, test_targets)
+        other_metrics = self.f1_matrix(confusion_matrix)
+        #precision_matrix = other_metrics[0]
+        #recall_matrix = other_metrics[1]
+        f1_matrix = other_metrics[2]
+        
+        print("Accuracy: %f \n" %accuracy)
+        print("Confusion Matrix: \n" %confusion_matrix)
+        print("f1 matrix: \n" %f1_matrix)
+        #print("Precision: \n" %precision_matrix)
+        #print("Recall: \n" %recall_matrix)
 
     def training_step(self, one_batch_of_data, one_batch_of_target):
         output = self(one_batch_of_data)
         label = one_batch_of_target
         loss = self.loss_fc(output, label)
+        loss.backward()
+        self.optimizer.step()
+        self.optimizer.zero_grad()
         """...blah blah blah..."""
         
-    def fit(self, data, targets, epochs):
+    def fit(self, data, targets, test_data, test_targets, epochs):
         for epoch in range(epochs):
+            print(dt.now())
             print("Currently training epoch %s out of %s" %(epoch, epochs))
-            self.train_one_epoch(data, targets)
+            self.train_one_epoch(data, targets, test_data, test_targets)
 
-    def compute_accuracy(self, input, target):
+    def compute_accuracy(self, data, target):
+        print("compute_accuracy start")
         acc = 0
         for idx in range(len(data)):
+            #print("Accuracy %d" %idx)
             input = data[idx].unsqueeze(0)
             output = self(input).squeeze(0)
             pred = output.argmax(dim=-1)
@@ -156,8 +143,10 @@ class ClassifierModel(nn.Module):
         return float(acc/len(data))
 
     def confusion_matrix(self, data, target):
+        print("confusion_matrix start")
         conf_mat = torch.zeros(size=(target.max()+1, target.max()+1))
         for idx in range(len(data)):
+            #print("Confusion %d" %idx)
             input = data[idx].unsqueeze(0)
             output = self(input).squeeze(0)
             pred = output.argmax(dim=-1)
@@ -165,15 +154,15 @@ class ClassifierModel(nn.Module):
             conf_mat[label][pred]+=1
         return conf_mat
     
-    def prec_rec(self, conf_mat):
-        p_matrix = torch.zeros(size=len(conf_mat))
-        r_matrix = torch.zeros(size=len(conf_mat))
+    def f1_matrix(self, conf_mat):
+        p_matrix = torch.zeros(len(conf_mat))
+        r_matrix = torch.zeros(len(conf_mat))
         for i in range(len(conf_mat)):
             p_matrix[i] = conf_mat[i][i]/torch.sum(conf_mat[i])
             r_matrix[i] = conf_mat[i][i]/torch.sum(conf_mat[:,i])
             
         f1_matrix = (p_matrix*r_matrix)/(p_matrix+r_matrix)
-        return p_matrix, r_matrix, f1_matrix
+        return [p_matrix, r_matrix, f1_matrix]
 
     def compile(self, optimizer, loss, metric):
         """
@@ -199,13 +188,39 @@ class ClassifierModel(nn.Module):
                 "mseloss": torch.nn.MSELoss(),
             }
             self.loss_fc=dict_loss[loss]
-
+        else:
+            self.loss_fc=loss
+            
+        if metric is not None:
+            dict_metric = {
+                "accuracy": self.compute_accuracy,
+                "f1": self.f1_matrix,
+                "confusion": self.confusion_matrix,
+            }
+            verbose = dict_metric[metric](x_test, y_test)
+            print(f"{metric}:",verbose)
+            
         self.metric = metric
                 
-#%%
-data = torch.tensor(velocity_data_sliced[0:6000], dtype = torch.float32).reshape(6000, 19875)
-targets = torch.tensor([id2label[i] for i in flow_type[0:6000, 1]])
+data = torch.tensor(velocity_data_sliced[1800:9000], dtype = torch.float32).reshape(7200, 19875)
+targets = torch.tensor([id2label[i] for i in flow_type[1800:9000, 1]])
+
+test_data = np.vstack((velocity_data_sliced[0:1800], velocity_data_sliced[9000:10800]))
+test_data = torch.tensor(test_data, dtype = torch.float32).reshape(3600, 19875)
+
+test_targets1 = [id2label[i] for i in flow_type[0:1800, 1]]
+test_targets2 = [id2label[i] for i in flow_type[9000:10800, 1]]
+test_targets = np.append(test_targets1, test_targets2)
+test_targets = torch.tensor(test_targets)
+
+dataset_normal = CustomTensorDataset(tensors=(data, targets), transform=None)
+dataset_loader = torch.utils.data.DataLoader(dataset_normal, batch_size=10)
+
+test_dataset_normal = CustomTensorDataset(tensors=(test_data, test_targets), transform=None)
+test_dataset_loader = torch.utils.data.DataLoader(test_dataset_normal, batch_size=10)
+
 num_classes = targets.max()+1
-# model = ClassifierModel(num_classes, id2label, label2id)
-print(targets)
-# model.fit(data, targets, epochs=5)
+model = ClassifierModel(num_classes, id2label, label2id)
+model.fit(data, targets, test_data, test_targets, epochs=10)
+torch.save(model,"initial_trained_model.pt")
+print(dt.now())
