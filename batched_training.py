@@ -42,7 +42,7 @@ velocity_data_sliced = velocity_data[int(flow_type[0,0]):int(flow_type[-1,0])+1,
 Three Golden Properties of Object Oriented Programming:
 1. Inheritance  -> Subclassing
 2. Polymorphism -> Method Overriding
-3. Abstraction  -> Subclassing
+3. Encapsulation-> Subclassing
 """
 class ClassifierModel(nn.Module):
 
@@ -229,7 +229,7 @@ targets = torch.tensor([id2label[i] for i in flow_type[0:6000, 1]])
 dataset = VortexDataset(data, targets)
 data_loader = DataLoader(dataset, batch_size=16, shuffle=True)
 num_classes = len(np.unique(targets))
-# model = ClassifierModel(num_classes, id2label, label2id)
-print(targets)
-# model.fit(data, targets, epochs=5)
+model = ClassifierModel(num_classes, id2label, label2id)
+# print(targets)
+model.fit(data, targets, epochs=5)
 # %%
