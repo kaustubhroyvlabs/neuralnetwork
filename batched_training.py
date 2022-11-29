@@ -5,9 +5,9 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 #%%
-flow_type = np.genfromtxt('FlowStructure_2022_03_24_total.dat', dtype=str)
-vol_data = np.genfromtxt('points_vol.dat', skip_header=1)
-velocity_data = np.load('data.npy')
+flow_type = np.genfromtxt('../FlowStructure_2022_03_24_total.dat', dtype=str)
+# vol_data = np.genfromtxt('points_vol.dat', skip_header=1)
+velocity_data = np.load('../data.npy')
 
 labels = np.unique(flow_type[:,1])
 label2id = {k:v for k,v in enumerate(labels)}

@@ -1,13 +1,14 @@
 #%%
+import os
 import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 #%%
-flow_type = np.genfromtxt('../FlowStructure_2022_03_24_total.dat', dtype=str)
-vol_data = np.genfromtxt('../points_vol.dat', skip_header=1)
-velocity_data = np.load('../data.npy')
+flow_type = np.genfromtxt('FlowStructure_2022_03_24_total.dat', dtype=str)
+vol_data = np.genfromtxt('points_vol.dat', skip_header=1)
+velocity_data = np.load('data.npy')
 
 labels = np.unique(flow_type[:,1])
 label2id = {k:v for k,v in enumerate(labels)}
@@ -49,32 +50,47 @@ class ClassifierModel(nn.Module):
     #   Constructor Function:
     def __init__(self, num_classes, id2label, label2id) -> None:
         super().__init__()
-        self.act = nn.GELU()
-        self.mlp = nn.ModuleList(
-            [
-                nn.Linear(in_features=19875, out_features=9936),
-                nn.Linear(in_features=9936, out_features=4968),
-                nn.Linear(in_features=4968, out_features=1000),
-                nn.Linear(in_features=1000, out_features=200),
-                nn.Linear(in_features=200, out_features=50),
-            ]
+        self.conv_block = nn.Sequential(
+            nn.Conv3d(in_channels=3, out_channels=16, kernel_size=3, stride=1, padding='same'),
+            nn.AdaptiveMaxPool3d(output_size=(8,8,16)),
+            nn.GELU(),
+            nn.Dropout(p=0.25),
+            nn.Conv3d(in_channels=16, out_channels=32, kernel_size=3, stride=1, padding='same'),
+            nn.AdaptiveMaxPool3d(output_size=(4,4,8)),
+            nn.GELU(),
+            nn.Dropout(p=0.25),
+            nn.Conv3d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding='same'),
+            nn.AdaptiveMaxPool3d(output_size=(2,2,4)),
+            nn.GELU(),
+            nn.Dropout(p=0.25),
+            nn.Conv3d(in_channels=64, out_channels=128, kernel_size=3, stride=1, padding='same'),
+            nn.AdaptiveAvgPool3d(output_size=(1,1,2)),
         )
-        self.classifier = nn.Linear(in_features=self.mlp[-1].out_features, out_features=num_classes)
-        self.dropout = nn.Dropout(p=0.25)
+        self.flatten = nn.Flatten()
+        self.classifier = nn.Sequential(
+            nn.Linear(in_features=256, out_features=512),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(in_features=512, out_features=128),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(in_features=128, out_features=32),
+            nn.ReLU(),
+            nn.Linear(in_features=32, out_features=num_classes)
+        )
         self.config = {}
         self.config['id2label']=id2label
         self.config['label2id']=label2id
         self.config['num_classes']=num_classes
         self.loss_fc = nn.CrossEntropyLoss(reduction='mean')
         self.model_compiled=False
+        self.train_metric = []
 
     #   Call Function/Default Function:
     def forward(self, input):
         x = input
-        for i in range(len(self.mlp)):
-            x = self.mlp[i](x)
-            x = self.dropout(x)
-            x = self.act(x)
+        x = self.conv_block(x)
+        x = self.flatten(x)
         x = self.classifier(x)
         return x
     
@@ -122,10 +138,14 @@ class ClassifierModel(nn.Module):
             elif self.metric=="accuracy":
                 acc = self.compute_accuracy(conf_mat)
                 print(f"Accuracy after epoch {epoch+1}: {acc*100}%")
+                performance_logger = acc
             elif self.metric=="f1":
                 p, r, f1 = self.prec_rec(conf_mat)
                 print(f"After epoch {epoch+1}:")
                 print(f"Precision: {p}\nRecall: {r}\nF1 Scores: {f1}")
+                performance_logger = torch.mean(f1)
+
+            self.training_logs(performance_logger, epoch)
 
 
     def training_step(self, one_batch_of_data, one_batch_of_target):
@@ -138,7 +158,13 @@ class ClassifierModel(nn.Module):
         
     def fit(self, train_data, test_data=None, epochs=1):
         assert self.model_compiled==True, "Model needs to be compiled before the fit function can be called."
-        self.max_epochs = epochs+1
+        if not os.path.exists("./results/"):
+            os.mkdir("./results")
+        if not os.path.exists("./results/checkpoints"):
+            os.mkdir("./results/checkpoints")
+        if not os.path.exists("./results/training_logs"):
+            os.mkdir("./results/training_logs")
+        self.max_epochs = epochs
         for epoch in range(epochs):
             print("Currently training epoch %s out of %s" %(epoch, epochs))
             self.train_one_epoch(train_data, test_data, epoch)
@@ -209,6 +235,14 @@ class ClassifierModel(nn.Module):
         if not file_path.endswith(".pt"):
             file_path = file_path+".pt"
         torch.save(self, file_path)
+
+    def training_logs(self, eval_metric, epoch):
+        self.train_metric.append(eval_metric)
+        if self.train_metric[-1]==max(self.train_metric):
+            save_path = f"./results/checkpoints/{self.metric}_{self.train_metric[-1]}@epoch_{epoch}.pt"
+            self.save_model(save_path)
+        with open("./results/training_logs/training_logs.txt", "a") as file:
+            file.write(f"{epoch}\t{self.train_metric[-1]}\n")
     
        
 #%%
@@ -219,17 +253,24 @@ class VortexDataset(Dataset):
         self.labels = targets
 
     def __getitem__(self, idx):
+        data_point = data[idx]
+        torch.tensor(data_point)
         return self.data[idx], self.labels[idx]
 
     def __len__(self):
         return len(self.data)
 
-data = torch.tensor(velocity_data_sliced[0:6000], dtype = torch.float32).reshape(6000,-1)
-targets = torch.tensor([id2label[i] for i in flow_type[0:6000, 1]])
+data = torch.tensor(new_velocity_data, dtype = torch.float32)#.reshape(velocity_data_sliced.shape[0],-1)
+targets = torch.tensor([id2label[i] for i in flow_type[:, 1]])
 dataset = VortexDataset(data, targets)
-data_loader = DataLoader(dataset, batch_size=16, shuffle=True)
+train_size = int(0.8 * len(dataset))
+test_size = len(dataset) - train_size
+train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=16, shuffle=True)
 num_classes = len(np.unique(targets))
+#%%
 model = ClassifierModel(num_classes, id2label, label2id)
 # print(targets)
-model.fit(data, targets, epochs=5)
+# model.fit(data, targets, epochs=5)
 # %%
