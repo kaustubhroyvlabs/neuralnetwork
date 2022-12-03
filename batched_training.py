@@ -5,9 +5,9 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 #%%
-flow_type = np.genfromtxt('../FlowStructure_2022_03_24_total.dat', dtype=str)
+flow_type = np.genfromtxt('FlowStructure_2022_03_24_total.dat', dtype=str)
 # vol_data = np.genfromtxt('points_vol.dat', skip_header=1)
-velocity_data = np.load('../data.npy')
+velocity_data = np.load('data.npy')
 
 labels = np.unique(flow_type[:,1])
 label2id = {k:v for k,v in enumerate(labels)}
@@ -52,9 +52,9 @@ class ClassifierModel(nn.Module):
         self.act = nn.GELU()
         self.mlp = nn.ModuleList(
             [
-                nn.Linear(in_features=19875, out_features=9936),
-                nn.Linear(in_features=9936, out_features=4968),
-                nn.Linear(in_features=4968, out_features=1000),
+                nn.Linear(in_features=19875, out_features=1000),
+                # nn.Linear(in_features=9936, out_features=4968),
+                # nn.Linear(in_features=4968, out_features=1000),
                 nn.Linear(in_features=1000, out_features=200),
                 nn.Linear(in_features=200, out_features=50),
             ]
@@ -230,6 +230,16 @@ dataset = VortexDataset(data, targets)
 data_loader = DataLoader(dataset, batch_size=16, shuffle=True)
 num_classes = len(np.unique(targets))
 model = ClassifierModel(num_classes, id2label, label2id)
-# print(targets)
-model.fit(data, targets, epochs=5)
+# data = torch.einsum('ijklm->imjkl', data)
+targets = torch.tensor([id2label[i] for i in flow_type[:, 1]])
+dataset = VortexDataset(data, targets)
+train_size = int(0.8 * len(dataset))
+test_size = len(dataset) - train_size
+train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=16, shuffle=True)
+num_classes = len(np.unique(targets))
+#%%
+model.compile('adam', 'crossentropy', 'accuracy')
+model.fit(train_loader, test_loader, epochs=5)
 # %%
